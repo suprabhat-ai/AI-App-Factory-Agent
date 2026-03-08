@@ -15,17 +15,34 @@ def _next_free_port(start: int = 3000, end: int = 9999) -> int:
 
 
 def parse_prompt_to_spec(prompt: str) -> dict:
-    features = [
-        "chat interface",
-        "message history",
-        "health and readiness checks",
-    ]
-    if "faq" in prompt.lower():
+    normalized = prompt.lower()
+    features = ["chat interface", "message history", "health and readiness checks"]
+    if "faq" in normalized:
         features.append("faq style responses")
+    if "multimodal" in normalized:
+        features.append("multimodal response planner")
+    if "workflow" in normalized or "automation" in normalized:
+        features.append("task orchestration workflows")
+
+    objectives = [
+        "Deliver trustworthy answers with explicit reasoning steps.",
+        "Minimize hallucinations with deterministic fallback behavior.",
+        "Provide clear UX states for loading, success, and failure.",
+    ]
+
+    guardrails = [
+        "Never execute unsafe user instructions.",
+        "Request clarification for ambiguous or high-risk tasks.",
+        "Fail closed with an explainable fallback response.",
+    ]
+
     return {
         "name": prompt.strip().split("\n", maxsplit=1)[0][:60] or "AI App",
         "description": prompt.strip(),
         "features": features,
+        "objectives": objectives,
+        "guardrails": guardrails,
+        "quality_bar": ["reliable", "observable", "testable", "secure-by-default"],
         "pages": ["/"],
         "endpoints": ["GET /health", "GET /ready", "POST /api/chat"],
     }
@@ -55,7 +72,7 @@ def write_generated_app(base_dir: Path, app_slug: str, spec: dict) -> dict:
     )
 
     (backend_dir / "app" / "main.py").write_text(
-        f'''from fastapi import FastAPI\nfrom pydantic import BaseModel\nimport os\n\napp = FastAPI(title="{app_slug} backend")\n\n\nclass ChatRequest(BaseModel):\n    message: str\n\n\n@app.get("/health")\ndef health():\n    return {{"status": "ok"}}\n\n\n@app.get("/ready")\ndef ready():\n    return {{"status": "ready"}}\n\n\n@app.post("/api/chat")\ndef chat(req: ChatRequest):\n    if not os.getenv("OPENAI_API_KEY"):\n        return {{"response": f"stub::{app_slug}::{{req.message}}"}}\n    return {{"response": f"live-mode-not-implemented::{{req.message}}"}}\n''',
+        f'''import os\nfrom fastapi import FastAPI\nfrom pydantic import BaseModel\n\napp = FastAPI(title="{app_slug} backend")\n\n\nclass ChatRequest(BaseModel):\n    message: str\n\n\ndef _deterministic_agent_response(message: str) -> str:\n    strategy = "analyze -> plan -> answer -> validate"\n    return f"agent::{app_slug}::strategy={{strategy}}::message={{message}}"\n\n\n@app.get("/health")\ndef health():\n    return {{"status": "ok"}}\n\n\n@app.get("/ready")\ndef ready():\n    return {{"status": "ready"}}\n\n\n@app.post("/api/chat")\ndef chat(req: ChatRequest):\n    if not os.getenv("OPENAI_API_KEY"):\n        return {{"response": _deterministic_agent_response(req.message), "mode": "stub"}}\n    return {{"response": f"live-mode-not-implemented::{{req.message}}", "mode": "live"}}\n''',
         encoding="utf-8",
     )
 
@@ -99,6 +116,11 @@ def write_generated_app(base_dir: Path, app_slug: str, spec: dict) -> dict:
 
     (pw_dir / "smoke.spec.ts").write_text(
         '''import { test, expect } from "@playwright/test";\n\ntest("chat ui loads", async ({ page }) => {\n  await page.goto("/");\n  await expect(page.getByRole("button", { name: "Send" })).toBeVisible();\n});\n''',
+        encoding="utf-8",
+    )
+
+    (frontend_dir / "playwright.config.ts").write_text(
+        f'''import {{ defineConfig }} from "@playwright/test";\n\nexport default defineConfig({{\n  testDir: "./tests",\n  use: {{\n    baseURL: "http://127.0.0.1:{frontend_port}",\n    headless: true,\n  }},\n  webServer: {{\n    command: "PORT={frontend_port} npm run dev",\n    url: "http://127.0.0.1:{frontend_port}",\n    reuseExistingServer: true,\n    timeout: 120000,\n  }},\n}});\n''',
         encoding="utf-8",
     )
 
